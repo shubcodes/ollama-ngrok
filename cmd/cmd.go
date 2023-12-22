@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -36,6 +37,9 @@ import (
 	"github.com/jmorganca/ollama/readline"
 	"github.com/jmorganca/ollama/server"
 	"github.com/jmorganca/ollama/version"
+
+	"golang.ngrok.com/ngrok"
+	"golang.ngrok.com/ngrok/config"
 )
 
 type ImageData []byte
@@ -1035,7 +1039,41 @@ func RunServer(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	return server.Serve(ln)
+	// Start the server in a new goroutine
+	go func() {
+		if err := server.Serve(ln); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Give some time for the server to start
+	time.Sleep(time.Second * 2)
+
+	// Construct the backend URL for the ngrok forwarder
+	backendURL := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, port),
+	}
+
+	// Start ngrok tunnel
+	ctx := context.Background()
+	forwarder, err := ngrok.ListenAndForward(ctx, backendURL,
+		config.HTTPEndpoint(
+		//config.WithScheme(config.SchemeHTTP), // Assuming your server is HTTP
+		),
+		ngrok.WithAuthtokenFromEnv(),
+		// Add additional ngrok configurations here if needed
+	)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("ngrok tunnel established and forwarding to: %s", backendURL.String())
+	log.Printf("ngrok tunnel URL: %s", forwarder.URL()) // Print the ngrok tunnel URL
+
+	// The server is now accessible via the ngrok tunnel URL
+	// The main goroutine needs to be kept alive to prevent the program from exiting
+	select {}
 }
 
 func getImageData(filePath string) ([]byte, error) {
